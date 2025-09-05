@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useMemo, useCallback, useState } from "react";
 import * as d3 from "d3";
-import { formatters, mathUtils , idUtils} from "./utils/graphUtils";
-import { DEFAULT_CONFIG , ANIMATION_TIMING} from "./utils/constants";
+import { formatters, mathUtils, idUtils } from "./utils/graphUtils";
+import { DEFAULT_CONFIG, ANIMATION_TIMING } from "./utils/constants";
 
 const { formatSI } = formatters;
 const { clamp } = mathUtils;
@@ -122,7 +122,7 @@ const Graph = React.memo(function Graph({
         .duration(ANIMATION_TIMING)
         .attr("r", 6);
 
-      // hover + click listeners (with correct scales)
+      // hover + click listeners
       merged
         .on("mouseover", function (event, d) {
           const { xScale, yScale } = currentScalesRef.current || {};
@@ -152,10 +152,10 @@ const Graph = React.memo(function Graph({
     if (!svgRef.current) return;
     const { innerWidth, innerHeight } = dimensions;
 
-      if (innerWidth <= 0 || innerHeight <= 0) {
-    return;
-  }
-  
+    if (innerWidth <= 0 || innerHeight <= 0) {
+      return;
+    }
+
     const svg = d3.select(svgRef.current);
 
     svg.selectAll("*").remove();
@@ -215,49 +215,92 @@ const Graph = React.memo(function Graph({
       .attr("stroke-width", 2);
 
     // initial scales
-// Give extra room for panning beyond data points
-const xDomain = getSafeDomain(d3.extent(points, (d) => d.x), [0, 100]);
-const yDomain = getSafeDomain(d3.extent(points, (d) => d.y), [0, 100]);
+    const xDomain = getSafeDomain(d3.extent(points, (d) => d.x), [0, 100]);
+    const yDomain = getSafeDomain(d3.extent(points, (d) => d.y), [0, 100]);
 
-const padding = 20; // extra units beyond min/max
-const baseX = d3
-  .scaleLinear()
-  .domain([xDomain[0] - padding, xDomain[1] + padding])
-  .range([0, innerWidth]);
+    const padding = 20;
+    const baseX = d3
+      .scaleLinear()
+      .domain([xDomain[0] - padding, xDomain[1] + padding])
+      .range([0, innerWidth]);
 
-const baseY = d3
-  .scaleLinear()
-  .domain([yDomain[0] - padding, yDomain[1] + padding])
-  .range([innerHeight, 0]);
-
+    const baseY = d3
+      .scaleLinear()
+      .domain([yDomain[0] - padding, yDomain[1] + padding])
+      .range([innerHeight, 0]);
 
     const xInitial = zoomTransformRef.current.rescaleX(baseX);
     const yInitial = zoomTransformRef.current.rescaleY(baseY);
 
     draw(xInitial, yInitial, g, sortedPoints, dimensions);
 
-    // --- Zoom & pan ---
-const zoom = d3
-  .zoom()
-  .scaleExtent(zoomScaleExtent)
-  .translateExtent([
-    [-innerWidth, -innerHeight],   // allow dragging beyond bounds
-    [innerWidth * 2, innerHeight * 2],
-  ])
-  .extent([
-    [0, 0],
-    [innerWidth, innerHeight],
-  ])
-  .on("zoom", (event) => {
-    zoomTransformRef.current = event.transform;
-    const newX = event.transform.rescaleX(baseX);
-    const newY = event.transform.rescaleY(baseY);
-    draw(newX, newY, g, sortedPoints, dimensions);
+    // --- Drag behavior for points ---
+// Replace your existing drag behavior section with this:
+
+// --- Drag behavior for points ---
+const drag = d3.drag()
+  .on("start", function (event, d) {
+    d3.select(this)
+      .raise()
+      .transition()
+      .duration(100)
+      .attr("r", 8)
+      .style("cursor", "grabbing");
+  })
+  .on("drag", function (event, d) {
+    const { xScale, yScale } = currentScalesRef.current || {};
+    if (!xScale || !yScale) return;
+
+    // Use pointer relative to SVG, then adjust for margins
+    const [mx, my] = d3.pointer(event, svg.node());
+    const adjustedX = mx - margin.left;
+    const adjustedY = my - margin.top;
+
+    // Invert with current zoom-aware scales
+    const newX = xScale.invert(adjustedX);
+    const newY = yScale.invert(adjustedY);
+
+    d3.select(this)
+      .attr("cx", xScale(newX))
+      .attr("cy", yScale(newY));
+
+    onPointsChange?.(
+      points.map((p) =>
+        p.id === d.id ? { ...p, x: newX, y: newY } : p
+      )
+    );
+  })
+  .on("end", function () {
+    d3.select(this)
+      .transition()
+      .duration(100)
+      .attr("r", 6)
+      .style("cursor", "grab");
   });
 
+svg.selectAll(".point").call(drag);
 
 
-    svg.call(zoom).on("dblclick.zoom", null); // disable default dblclick zoom
+    // --- Zoom & pan ---
+    const zoom = d3
+      .zoom()
+      .scaleExtent(zoomScaleExtent)
+      .translateExtent([
+        [-innerWidth, -innerHeight],
+        [innerWidth * 2, innerHeight * 2],
+      ])
+      .extent([
+        [0, 0],
+        [innerWidth, innerHeight],
+      ])
+      .on("zoom", (event) => {
+        zoomTransformRef.current = event.transform;
+        const newX = event.transform.rescaleX(baseX);
+        const newY = event.transform.rescaleY(baseY);
+        draw(newX, newY, g, sortedPoints, dimensions);
+      });
+
+    svg.call(zoom).on("dblclick.zoom", null);
 
     // --- Double click to add point ---
     svg.on("dblclick", (event) => {
@@ -279,13 +322,12 @@ const zoom = d3
       onPointsChange?.([...points, newPoint]);
     });
 
-    // cleanup
     return () => {
       svg.on(".zoom", null).on("dblclick", null);
     };
   }, [points, sortedPoints, dimensions, margin, draw, onPointsChange, zoomScaleExtent]);
 
-  // highlight effect when table selects
+  // highlight effect
   useEffect(() => {
     if (!svgRef.current) return;
     const svg = d3.select(svgRef.current);
