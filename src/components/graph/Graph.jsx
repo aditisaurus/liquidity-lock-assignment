@@ -1,15 +1,7 @@
-// src/components/Graph/Graph.jsx
 import React, { useEffect, useRef, useMemo, useCallback, useState } from "react";
 import * as d3 from "d3";
-import debounce from "lodash.debounce";
-
-import {
-  ANIMATION_TIMING,
-  INTERACTION_THRESHOLDS,
-  DEFAULT_CONFIG,
-} from "../../constants/graphConstants";
-
-import { formatters, mathUtils, idUtils } from "../../utils/graphUtils";
+import { formatters, mathUtils , idUtils} from "./utils/graphUtils";
+import { DEFAULT_CONFIG , ANIMATION_TIMING} from "./utils/constants";
 
 const { formatSI } = formatters;
 const { clamp } = mathUtils;
@@ -21,8 +13,6 @@ const Graph = React.memo(function Graph({
   onPointsChange,
   onPointHover,
   onPointClick,
-  width = DEFAULT_CONFIG.DIMENSIONS.width,
-  height = DEFAULT_CONFIG.DIMENSIONS.height,
   margin = DEFAULT_CONFIG.MARGINS,
   xTickFormat,
   yTickFormat,
@@ -161,6 +151,11 @@ const Graph = React.memo(function Graph({
   useEffect(() => {
     if (!svgRef.current) return;
     const { innerWidth, innerHeight } = dimensions;
+
+      if (innerWidth <= 0 || innerHeight <= 0) {
+    return;
+  }
+  
     const svg = d3.select(svgRef.current);
 
     svg.selectAll("*").remove();
@@ -220,11 +215,21 @@ const Graph = React.memo(function Graph({
       .attr("stroke-width", 2);
 
     // initial scales
-    const xDomain = getSafeDomain(d3.extent(points, (d) => d.x));
-    const yDomain = getSafeDomain(d3.extent(points, (d) => d.y));
+// Give extra room for panning beyond data points
+const xDomain = getSafeDomain(d3.extent(points, (d) => d.x), [0, 100]);
+const yDomain = getSafeDomain(d3.extent(points, (d) => d.y), [0, 100]);
 
-    const baseX = d3.scaleLinear().domain(xDomain).range([0, innerWidth]);
-    const baseY = d3.scaleLinear().domain(yDomain).range([innerHeight, 0]);
+const padding = 20; // extra units beyond min/max
+const baseX = d3
+  .scaleLinear()
+  .domain([xDomain[0] - padding, xDomain[1] + padding])
+  .range([0, innerWidth]);
+
+const baseY = d3
+  .scaleLinear()
+  .domain([yDomain[0] - padding, yDomain[1] + padding])
+  .range([innerHeight, 0]);
+
 
     const xInitial = zoomTransformRef.current.rescaleX(baseX);
     const yInitial = zoomTransformRef.current.rescaleY(baseY);
@@ -232,23 +237,25 @@ const Graph = React.memo(function Graph({
     draw(xInitial, yInitial, g, sortedPoints, dimensions);
 
     // --- Zoom & pan ---
-    const zoom = d3
-      .zoom()
-      .scaleExtent(zoomScaleExtent)
-      .translateExtent([
-        [0, 0],
-        [innerWidth, innerHeight],
-      ])
-      .extent([
-        [0, 0],
-        [innerWidth, innerHeight],
-      ])
-      .on("zoom", (event) => {
-        zoomTransformRef.current = event.transform;
-        const newX = event.transform.rescaleX(baseX);
-        const newY = event.transform.rescaleY(baseY);
-        draw(newX, newY, g, sortedPoints, dimensions);
-      });
+const zoom = d3
+  .zoom()
+  .scaleExtent(zoomScaleExtent)
+  .translateExtent([
+    [-innerWidth, -innerHeight],   // allow dragging beyond bounds
+    [innerWidth * 2, innerHeight * 2],
+  ])
+  .extent([
+    [0, 0],
+    [innerWidth, innerHeight],
+  ])
+  .on("zoom", (event) => {
+    zoomTransformRef.current = event.transform;
+    const newX = event.transform.rescaleX(baseX);
+    const newY = event.transform.rescaleY(baseY);
+    draw(newX, newY, g, sortedPoints, dimensions);
+  });
+
+
 
     svg.call(zoom).on("dblclick.zoom", null); // disable default dblclick zoom
 

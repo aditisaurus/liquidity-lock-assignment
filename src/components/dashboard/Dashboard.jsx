@@ -1,5 +1,4 @@
-// src/components/Dashboard/Dashboard.jsx
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import DataTable from "../Table/DataTable";
 import Graph from "../Graph/Graph";
 import EditPointDialog from "../dialog/EditPointDialog";
@@ -27,6 +26,9 @@ const Dashboard = ({ user, onLogout }) => {
     return saved ?? SAMPLE_POINTS;
   });
 
+  const [history, setHistory] = useState([]);
+  const [future, setFuture] = useState([]);
+
   const [editingPoint, setEditingPoint] = useState(null);
   const [highlightedPoint, setHighlightedPoint] = useState(null);
   const [notification, setNotification] = useState({
@@ -42,8 +44,6 @@ const Dashboard = ({ user, onLogout }) => {
       localStorage.setItem(storageKey, JSON.stringify(points));
     } catch {}
   }, [points, storageKey]);
-
-  // 🔥 removed the extra effect that overwrote points from localStorage
 
   useEffect(() => {
     const onStorage = (e) => {
@@ -64,15 +64,61 @@ const Dashboard = ({ user, onLogout }) => {
     setTimeout(() => setNotification({ show: false, message: "" }), 3000);
   };
 
-  const handlePointsChange = useCallback((newPoints) => {
-    setPoints(
-      newPoints.map((p) => ({
-        ...p,
-        x: sanitizeNumber(p.x),
-        y: sanitizeNumber(p.y),
-      }))
+  const handlePointsChange = useCallback(
+    (newPoints) => {
+      setHistory((prev) => [...prev, points]); // push current state
+      setFuture([]); // clear redo stack
+      setPoints(
+        newPoints.map((p) => ({
+          ...p,
+          x: sanitizeNumber(p.x),
+          y: sanitizeNumber(p.y),
+        }))
+      );
+    },
+    [points]
+  );
+
+  const handleUndo = () => {
+    if (history.length === 0) return;
+    const prev = history[history.length - 1];
+    setFuture((f) => [points, ...f]);
+    setHistory((h) => h.slice(0, -1));
+    setPoints(prev);
+  };
+
+  const handleRedo = () => {
+    if (future.length === 0) return;
+    const next = future[0];
+    setHistory((h) => [...h, points]);
+    setFuture((f) => f.slice(1));
+    setPoints(next);
+  };
+
+  const handleExportJSON = () => {
+    const blob = new Blob([JSON.stringify(points, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "points.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportCSV = () => {
+    const csv = ["id,x,y", ...points.map((p) => `${p.id},${p.x},${p.y}`)].join(
+      "\n"
     );
-  }, []);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "points.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const handlePointEdit = useCallback((point) => {
     setEditingPoint(point);
@@ -127,6 +173,8 @@ const Dashboard = ({ user, onLogout }) => {
 
   const handleClearAll = () => {
     if (window.confirm("Are you sure you want to clear all points?")) {
+      setHistory((prev) => [...prev, points]); // save before clearing
+      setFuture([]);
       setPoints([]);
       setHighlightedPoint(null);
       setEditingPoint(null);
@@ -150,6 +198,10 @@ const Dashboard = ({ user, onLogout }) => {
         user={user}
         onClearAll={handleClearAll}
         onLogout={handleLogout}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        canUndo={history.length > 0}
+        canRedo={future.length > 0}
       />
 
       {/* Main Grid */}
@@ -195,6 +247,8 @@ const Dashboard = ({ user, onLogout }) => {
               onPointDelete={handlePointDelete}
               highlightedPoint={highlightedPoint}
               onRowHover={handlePointHover}
+              onExportJSON={handleExportJSON}
+              onExportCSV={handleExportCSV}
             />
           </div>
 

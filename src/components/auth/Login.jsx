@@ -1,5 +1,3 @@
-import React from "react";
-
 const Login = ({ onLogin, loading }) => {
   const styles = {
     container: {
