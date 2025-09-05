@@ -1,0 +1,91 @@
+{
+  "hash": "5c333c03",
+  "configHash": "f5ad5846",
+  "lockfileHash": "fa388dee",
+  "browserHash": "fd2ef835",
+  "optimized": {
+    "react": {
+      "src": "../../node_modules/react/index.js",
+      "file": "react.js",
+      "fileHash": "24f59de7",
+      "needsInterop": true
+    },
+    "react-dom/client": {
+      "src": "../../node_modules/react-dom/client.js",
+      "file": "react-dom_client.js",
+      "fileHash": "064a4908",
+      "needsInterop": true
+    },
+    "react-router-dom": {
+      "src": "../../node_modules/react-router-dom/dist/index.js",
+      "file": "react-router-dom.js",
+      "fileHash": "9c5f4853",
+      "needsInterop": false
+    },
+    "@mui/material/styles": {
+      "src": "../../node_modules/@mui/material/styles/index.js",
+      "file": "@mui_material_styles.js",
+      "fileHash": "20a18be2",
+      "needsInterop": false
+    },
+    "@mui/material/CssBaseline": {
+      "src": "../../node_modules/@mui/material/CssBaseline/index.js",
+      "file": "@mui_material_CssBaseline.js",
+      "fileHash": "67d90b80",
+      "needsInterop": false
+    },
+    "@mui/material": {
+      "src": "../../node_modules/@mui/material/index.js",
+      "file": "@mui_material.js",
+      "fileHash": "15bba457",
+      "needsInterop": false
+    },
+    "@mui/icons-material/Google": {
+      "src": "../../node_modules/@mui/icons-material/esm/Google.js",
+      "file": "@mui_icons-material_Google.js",
+      "fileHash": "78f96f6e",
+      "needsInterop": false
+    },
+    "firebase/auth": {
+      "src": "../../node_modules/firebase/auth/dist/esm/index.esm.js",
+      "file": "firebase_auth.js",
+      "fileHash": "489ab5b8",
+      "needsInterop": false
+    },
+    "firebase/app": {
+      "src": "../../node_modules/firebase/app/dist/esm/index.esm.js",
+      "file": "firebase_app.js",
+      "fileHash": "eb781bce",
+      "needsInterop": false
+    }
+  },
+  "chunks": {
+    "chunk-TKHB4QMX": {
+      "file": "chunk-TKHB4QMX.js"
+    },
+    "chunk-FIJHFBZW": {
+      "file": "chunk-FIJHFBZW.js"
+    },
+    "chunk-MAXVAINL": {
+      "file": "chunk-MAXVAINL.js"
+    },
+    "chunk-T3ELVMPG": {
+      "file": "chunk-T3ELVMPG.js"
+    },
+    "chunk-YMYOOS7P": {
+      "file": "chunk-YMYOOS7P.js"
+    },
+    "chunk-PSFGUPIW": {
+      "file": "chunk-PSFGUPIW.js"
+    },
+    "chunk-YLDSBLSF": {
+      "file": "chunk-YLDSBLSF.js"
+    },
+    "chunk-GUSCJXSE": {
+      "file": "chunk-GUSCJXSE.js"
+    },
+    "chunk-DC5AMYBS": {
+      "file": "chunk-DC5AMYBS.js"
+    }
+  }
+}
