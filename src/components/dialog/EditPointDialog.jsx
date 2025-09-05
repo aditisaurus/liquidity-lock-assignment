@@ -14,93 +14,79 @@ import {
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 import debounce from "lodash.debounce";
-import { usePoints } from "../../hooks/usePoints";
 
 const Transition = React.forwardRef(function Transition(props, ref) {
   return <Slide direction="up" ref={ref} {...props} />;
 });
 
 const clamp = (val, min, max) => Math.min(Math.max(val, min), max);
-
-// Small helper to parse numbers safely (accepts "1e3" etc.)
 const parseNumber = (v) => {
   if (v === "" || v === null || v === undefined) return { ok: false };
   const n = Number(v);
-  if (Number.isFinite(n)) return { ok: true, n };
-  return { ok: false };
+  return Number.isFinite(n) ? { ok: true, n } : { ok: false };
 };
 
-const EditPointDialog = memo(function EditPointDialog() {
-  const {
-    editingPoint, // { id, x, y } | null
-    updatePoint, // (id, x, y)
-    stopEditingPoint, // () => void
-    boundingBox, // {minX,maxX,minY,maxY}
-  } = usePoints();
-
-  const open = !!editingPoint;
-
-  // Local form state
+/**
+ * Controlled popup editor (pure component).
+ * Props:
+ *  - open: boolean
+ *  - point: { id, x, y } | null
+ *  - onClose(): void
+ *  - onSave(updatedPoint): void
+ *  - onLiveChange?(updatedPoint): void    // 👈 debounced as you type
+ *  - bounds?: { minX, maxX, minY, maxY }  // optional validation/labels
+ */
+const EditPointDialog = memo(function EditPointDialog({
+  open,
+  point,
+  onClose,
+  onSave,
+  onLiveChange,
+  bounds,
+}) {
   const [formData, setFormData] = useState({ x: "", y: "" });
   const [errors, setErrors] = useState({ x: "", y: "" });
   const [touched, setTouched] = useState({ x: false, y: false });
   const [saveError, setSaveError] = useState("");
 
-  // Debounced live update to reflect on graph/table as user types
-  const debouncedLiveUpdate = useMemo(
-    () =>
-      debounce((id, x, y) => {
-        updatePoint(id, x, y);
-      }, 120),
-    [updatePoint]
+  // Debounced live callback
+  const debouncedLive = useMemo(
+    () => debounce((p) => onLiveChange && onLiveChange(p), 120),
+    [onLiveChange]
   );
+  useEffect(() => () => debouncedLive.cancel(), [debouncedLive]);
 
-  // Cancel any pending debounced calls on unmount/recreate
+  // Seed state on open/point change
   useEffect(() => {
-    return () => {
-      debouncedLiveUpdate.cancel();
-    };
-  }, [debouncedLiveUpdate]);
-
-  // When dialog opens or the editingPoint changes externally, seed the form
-  useEffect(() => {
-    if (editingPoint) {
-      setFormData({
-        x: editingPoint.x.toString(),
-        y: editingPoint.y.toString(),
-      });
+    if (open && point) {
+      setFormData({ x: String(point.x), y: String(point.y) });
       setErrors({ x: "", y: "" });
       setTouched({ x: false, y: false });
       setSaveError("");
     } else {
-      // Clean up when closed
       setFormData({ x: "", y: "" });
       setErrors({ x: "", y: "" });
       setTouched({ x: false, y: false });
       setSaveError("");
     }
-  }, [editingPoint]);
+  }, [open, point]);
 
-  // Validation
   const validateField = useCallback(
     (name, value) => {
       if (value === "") return `${name.toUpperCase()} is required`;
       const parsed = parseNumber(value);
       if (!parsed.ok) return `${name.toUpperCase()} must be a valid number`;
-
-      const n = parsed.n;
-      if (name === "x") {
-        if (n < boundingBox.minX || n > boundingBox.maxX) {
-          return `X must be between ${boundingBox.minX} and ${boundingBox.maxX}`;
-        }
-      } else {
-        if (n < boundingBox.minY || n > boundingBox.maxY) {
-          return `Y must be between ${boundingBox.minY} and ${boundingBox.maxY}`;
-        }
+      if (bounds) {
+        const { minX, maxX, minY, maxY } = bounds;
+        const n = parsed.n;
+        if (name === "x" && (n < minX || n > maxX))
+          return `X must be between ${minX} and ${maxX}`;
+        if (name === "y" && (n < minY || n > maxY))
+          return `Y must be between ${minY} and ${maxY}`;
       }
       return "";
     },
-    [boundingBox]
+    [bounds]
   );
 
   const runValidation = useCallback(
@@ -113,40 +99,38 @@ const EditPointDialog = memo(function EditPointDialog() {
     [validateField]
   );
 
-  // Live-update graph as user types valid values
-  const pushLiveUpdateIfValid = useCallback(
+  const pushLiveIfValid = useCallback(
     (nextForm) => {
-      if (!editingPoint) return;
-
+      if (!point) return;
       const px = parseNumber(nextForm.x);
       const py = parseNumber(nextForm.y);
       if (!px.ok || !py.ok) return;
 
-      // Clamp to bounding box for robustness
-      const nx = clamp(px.n, boundingBox.minX, boundingBox.maxX);
-      const ny = clamp(py.n, boundingBox.minY, boundingBox.maxY);
-
-      debouncedLiveUpdate(editingPoint.id, nx, ny);
+      let nx = px.n,
+        ny = py.n;
+      if (bounds) {
+        nx = clamp(nx, bounds.minX, bounds.maxX);
+        ny = clamp(ny, bounds.minY, bounds.maxY);
+      }
+      debouncedLive({ ...point, x: nx, y: ny });
     },
-    [debouncedLiveUpdate, editingPoint, boundingBox]
+    [debouncedLive, bounds, point]
   );
 
   const handleChange = useCallback(
     (e) => {
-      const { name, value } = e.target; // name === 'x' | 'y'
+      const { name, value } = e.target;
       const next = { ...formData, [name]: value };
       setFormData(next);
 
-      // If already touched, re-validate on change
       if (touched[name]) {
         const ok = runValidation(next);
-        if (ok) pushLiveUpdateIfValid(next);
+        if (ok) pushLiveIfValid(next);
       } else {
-        // Still push live update if it's valid even before blur
-        pushLiveUpdateIfValid(next);
+        pushLiveIfValid(next);
       }
     },
-    [formData, touched, runValidation, pushLiveUpdateIfValid]
+    [formData, touched, runValidation, pushLiveIfValid]
   );
 
   const handleBlur = useCallback(
@@ -158,78 +142,68 @@ const EditPointDialog = memo(function EditPointDialog() {
     [formData, runValidation]
   );
 
-  const handleClose = useCallback(() => {
-    stopEditingPoint();
-  }, [stopEditingPoint]);
-
   const handleSave = useCallback(() => {
-    if (!editingPoint) return;
-
+    if (!point) return;
     const ok = runValidation(formData);
-    if (!ok) {
-      setSaveError("Please fix validation errors before saving.");
-      return;
-    }
+    if (!ok) return setSaveError("Please fix validation errors before saving.");
 
     const px = parseNumber(formData.x);
     const py = parseNumber(formData.y);
-    if (!px.ok || !py.ok) {
-      setSaveError("Please enter valid numeric values.");
-      return;
+    if (!px.ok || !py.ok)
+      return setSaveError("Please enter valid numeric values.");
+
+    let nx = px.n,
+      ny = py.n;
+    if (bounds) {
+      nx = clamp(nx, bounds.minX, bounds.maxX);
+      ny = clamp(ny, bounds.minY, bounds.maxY);
     }
 
-    const nx = clamp(px.n, boundingBox.minX, boundingBox.maxX);
-    const ny = clamp(py.n, boundingBox.minY, boundingBox.maxY);
-
-    // Final update (non-debounced) to ensure exact saved values
-    updatePoint(editingPoint.id, nx, ny);
+    onSave({ ...point, x: nx, y: ny });
     setSaveError("");
-    stopEditingPoint();
-  }, [
-    editingPoint,
-    formData,
-    runValidation,
-    boundingBox,
-    updatePoint,
-    stopEditingPoint,
-  ]);
+    onClose();
+  }, [point, formData, bounds, onSave, onClose, runValidation]);
 
   const handleKeyDown = useCallback(
     (e) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        handleClose();
+        onClose();
       } else if (e.key === "Enter") {
         e.preventDefault();
         handleSave();
       }
     },
-    [handleClose, handleSave]
+    [onClose, handleSave]
   );
 
   const isSaveDisabled = useMemo(() => {
-    if (!editingPoint) return true;
-    // Disable if any error present or fields empty
+    if (!open || !point) return true;
     if (!formData.x || !formData.y) return true;
     return Boolean(errors.x || errors.y);
-  }, [editingPoint, formData, errors]);
+  }, [open, point, formData, errors]);
+
+  const xLabel = bounds ? `X (${bounds.minX} – ${bounds.maxX})` : "X";
+  const yLabel = bounds ? `Y (${bounds.minY} – ${bounds.maxY})` : "Y";
 
   return (
     <Dialog
       open={open}
-      onClose={handleClose}
+      onClose={onClose}
       TransitionComponent={Transition}
       keepMounted
       fullWidth
       maxWidth="xs"
       onKeyDown={handleKeyDown}
       aria-labelledby="edit-point-title"
+      // lighten the backdrop so you can see graph/table behind
+      slotProps={{ backdrop: { sx: { backgroundColor: "rgba(0,0,0,0.2)" } } }}
     >
       <DialogTitle id="edit-point-title" sx={{ pr: 6 }}>
         Edit Coordinates
         <IconButton
           aria-label="close"
-          onClick={handleClose}
+          onClick={onClose}
           sx={{ position: "absolute", right: 8, top: 8 }}
           size="small"
         >
@@ -244,25 +218,23 @@ const EditPointDialog = memo(function EditPointDialog() {
           </Box>
         )}
 
-        {editingPoint && (
+        {point && (
           <Stack spacing={2}>
             <TextField
               label="Point ID"
-              value={editingPoint.id.slice(-12)}
+              value={String(point.id)}
               size="small"
               fullWidth
               InputProps={{ readOnly: true }}
             />
             <TextField
               name="x"
-              label={`X (${boundingBox.minX} – ${boundingBox.maxX})`}
+              label={xLabel}
               value={formData.x}
               onChange={handleChange}
               onBlur={handleBlur}
               error={!!errors.x}
-              helperText={
-                errors.x || "Use numbers; updates reflect live on graph"
-              }
+              helperText={errors.x || "Live updates while typing"}
               inputMode="decimal"
               fullWidth
               autoFocus
@@ -270,7 +242,7 @@ const EditPointDialog = memo(function EditPointDialog() {
             />
             <TextField
               name="y"
-              label={`Y (${boundingBox.minY} – ${boundingBox.maxY})`}
+              label={yLabel}
               value={formData.y}
               onChange={handleChange}
               onBlur={handleBlur}
@@ -285,7 +257,7 @@ const EditPointDialog = memo(function EditPointDialog() {
       </DialogContent>
 
       <DialogActions>
-        <Button onClick={handleClose} variant="text">
+        <Button onClick={onClose} variant="text">
           Cancel
         </Button>
         <Button
