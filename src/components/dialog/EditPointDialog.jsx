@@ -1,41 +1,13 @@
 import React, { useState, useEffect, useMemo, useCallback, memo } from "react";
-import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
-  Button,
-  Box,
-  Alert,
-  IconButton,
-  Slide,
-  Stack,
-} from "@mui/material";
-import CloseIcon from "@mui/icons-material/Close";
 import debounce from "lodash.debounce";
+import { clamp, parseNumber } from "./utils";
+import {
+  DEBOUNCE_DELAY,
+  DEFAULT_FORM,
+  DEFAULT_ERRORS,
+  DEFAULT_TOUCHED,
+} from "./constants";
 
-const Transition = React.forwardRef(function Transition(props, ref) {
-  return <Slide direction="up" ref={ref} {...props} />;
-});
-
-const clamp = (val, min, max) => Math.min(Math.max(val, min), max);
-const parseNumber = (v) => {
-  if (v === "" || v === null || v === undefined) return { ok: false };
-  const n = Number(v);
-  return Number.isFinite(n) ? { ok: true, n } : { ok: false };
-};
-
-/**
- * Controlled popup editor (pure component).
- * Props:
- *  - open: boolean
- *  - point: { id, x, y } | null
- *  - onClose(): void
- *  - onSave(updatedPoint): void
- *  - onLiveChange?(updatedPoint): void    // 👈 debounced as you type
- *  - bounds?: { minX, maxX, minY, maxY }  // optional validation/labels
- */
 const EditPointDialog = memo(function EditPointDialog({
   open,
   point,
@@ -44,31 +16,28 @@ const EditPointDialog = memo(function EditPointDialog({
   onLiveChange,
   bounds,
 }) {
-  const [formData, setFormData] = useState({ x: "", y: "" });
-  const [errors, setErrors] = useState({ x: "", y: "" });
-  const [touched, setTouched] = useState({ x: false, y: false });
+  const [formData, setFormData] = useState(DEFAULT_FORM);
+  const [errors, setErrors] = useState(DEFAULT_ERRORS);
+  const [touched, setTouched] = useState(DEFAULT_TOUCHED);
   const [saveError, setSaveError] = useState("");
 
   // Debounced live callback
   const debouncedLive = useMemo(
-    () => debounce((p) => onLiveChange && onLiveChange(p), 120),
+    () => debounce((p) => onLiveChange && onLiveChange(p), DEBOUNCE_DELAY),
     [onLiveChange]
   );
   useEffect(() => () => debouncedLive.cancel(), [debouncedLive]);
 
-  // Seed state on open/point change
+  // Reset state on open/point change
   useEffect(() => {
     if (open && point) {
       setFormData({ x: String(point.x), y: String(point.y) });
-      setErrors({ x: "", y: "" });
-      setTouched({ x: false, y: false });
-      setSaveError("");
     } else {
-      setFormData({ x: "", y: "" });
-      setErrors({ x: "", y: "" });
-      setTouched({ x: false, y: false });
-      setSaveError("");
+      setFormData(DEFAULT_FORM);
     }
+    setErrors(DEFAULT_ERRORS);
+    setTouched(DEFAULT_TOUCHED);
+    setSaveError("");
   }, [open, point]);
 
   const validateField = useCallback(
@@ -76,6 +45,7 @@ const EditPointDialog = memo(function EditPointDialog({
       if (value === "") return `${name.toUpperCase()} is required`;
       const parsed = parseNumber(value);
       if (!parsed.ok) return `${name.toUpperCase()} must be a valid number`;
+
       if (bounds) {
         const { minX, maxX, minY, maxY } = bounds;
         const n = parsed.n;
@@ -124,8 +94,7 @@ const EditPointDialog = memo(function EditPointDialog({
       setFormData(next);
 
       if (touched[name]) {
-        const ok = runValidation(next);
-        if (ok) pushLiveIfValid(next);
+        if (runValidation(next)) pushLiveIfValid(next);
       } else {
         pushLiveIfValid(next);
       }
@@ -186,89 +155,112 @@ const EditPointDialog = memo(function EditPointDialog({
   const xLabel = bounds ? `X (${bounds.minX} – ${bounds.maxX})` : "X";
   const yLabel = bounds ? `Y (${bounds.minY} – ${bounds.maxY})` : "Y";
 
+  if (!open) return null;
+
   return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      TransitionComponent={Transition}
-      keepMounted
-      fullWidth
-      maxWidth="xs"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
       onKeyDown={handleKeyDown}
-      aria-labelledby="edit-point-title"
-      // lighten the backdrop so you can see graph/table behind
-      slotProps={{ backdrop: { sx: { backgroundColor: "rgba(0,0,0,0.2)" } } }}
     >
-      <DialogTitle id="edit-point-title" sx={{ pr: 6 }}>
-        Edit Coordinates
-        <IconButton
-          aria-label="close"
-          onClick={onClose}
-          sx={{ position: "absolute", right: 8, top: 8 }}
-          size="small"
-        >
-          <CloseIcon fontSize="small" />
-        </IconButton>
-      </DialogTitle>
+      <div className="w-full max-w-sm rounded-lg bg-white shadow-lg">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b px-4 py-2">
+          <h2 className="text-lg font-semibold">Edit Coordinates</h2>
+          <button
+            onClick={onClose}
+            className="text-gray-500 hover:text-gray-700"
+          >
+            ✕
+          </button>
+        </div>
 
-      <DialogContent dividers>
-        {saveError && (
-          <Box mb={2}>
-            <Alert severity="error">{saveError}</Alert>
-          </Box>
-        )}
+        {/* Content */}
+        <div className="p-4">
+          {saveError && (
+            <div className="mb-2 rounded bg-red-100 px-3 py-2 text-sm text-red-700">
+              {saveError}
+            </div>
+          )}
 
-        {point && (
-          <Stack spacing={2}>
-            <TextField
-              label="Point ID"
-              value={String(point.id)}
-              size="small"
-              fullWidth
-              InputProps={{ readOnly: true }}
-            />
-            <TextField
-              name="x"
-              label={xLabel}
-              value={formData.x}
-              onChange={handleChange}
-              onBlur={handleBlur}
-              error={!!errors.x}
-              helperText={errors.x || "Live updates while typing"}
-              inputMode="decimal"
-              fullWidth
-              autoFocus
-              size="small"
-            />
-            <TextField
-              name="y"
-              label={yLabel}
-              value={formData.y}
-              onChange={handleChange}
-              onBlur={handleBlur}
-              error={!!errors.y}
-              helperText={errors.y || "Drag on graph or edit here"}
-              inputMode="decimal"
-              fullWidth
-              size="small"
-            />
-          </Stack>
-        )}
-      </DialogContent>
+          {point && (
+            <div className="space-y-3">
+              {/* Point ID */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700">
+                  Point ID
+                </label>
+                <input
+                  className="mt-1 w-full rounded border border-gray-300 bg-gray-100 p-2 text-sm"
+                  value={point.id}
+                  readOnly
+                />
+              </div>
 
-      <DialogActions>
-        <Button onClick={onClose} variant="text">
-          Cancel
-        </Button>
-        <Button
-          onClick={handleSave}
-          variant="contained"
-          disabled={isSaveDisabled}
-        >
-          Save
-        </Button>
-      </DialogActions>
-    </Dialog>
+              {/* X Input */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700">
+                  {xLabel}
+                </label>
+                <input
+                  name="x"
+                  value={formData.x}
+                  onChange={handleChange}
+                  onBlur={handleBlur}
+                  className={`mt-1 w-full rounded border p-2 text-sm ${
+                    errors.x ? "border-red-500" : "border-gray-300"
+                  }`}
+                  placeholder="Enter X"
+                />
+                {errors.x && (
+                  <p className="mt-1 text-xs text-red-600">{errors.x}</p>
+                )}
+              </div>
+
+              {/* Y Input */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700">
+                  {yLabel}
+                </label>
+                <input
+                  name="y"
+                  value={formData.y}
+                  onChange={handleChange}
+                  onBlur={handleBlur}
+                  className={`mt-1 w-full rounded border p-2 text-sm ${
+                    errors.y ? "border-red-500" : "border-gray-300"
+                  }`}
+                  placeholder="Enter Y"
+                />
+                {errors.y && (
+                  <p className="mt-1 text-xs text-red-600">{errors.y}</p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end gap-2 border-t px-4 py-2">
+          <button
+            onClick={onClose}
+            className="rounded px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={isSaveDisabled}
+            className={`rounded px-4 py-2 text-sm font-medium text-white ${
+              isSaveDisabled
+                ? "cursor-not-allowed bg-gray-400"
+                : "bg-blue-600 hover:bg-blue-700"
+            }`}
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
   );
 });
 
