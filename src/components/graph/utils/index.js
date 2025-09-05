@@ -4,7 +4,7 @@
  */
 
 // Re-export all constants
-export * from "../../constants/graphConstants";
+export * from "../../../constants/graphConstants";
 
 // Re-export all utilities
 export {
@@ -14,18 +14,18 @@ export {
   dataUtils,
   scaleUtils,
   viewportUtils,
-} from "../graphUtils";
+} from "./graphUtils";
 
 // Create convenient grouped exports
-export { formatters as format } from "../graphUtils";
-export { mathUtils as math } from "../graphUtils";
-export { idUtils as id } from "../graphUtils";
-export { dataUtils as data } from "../graphUtils";
-export { scaleUtils as scale } from "../graphUtils";
-export { viewportUtils as viewport } from "../graphUtils";
+export { formatters as format } from "./graphUtils";
+export { mathUtils as math } from "./graphUtils";
+export { idUtils as id } from "./graphUtils";
+export { dataUtils as data } from "./graphUtils";
+export { scaleUtils as scale } from "./graphUtils";
+export { viewportUtils as viewport } from "./graphUtils";
 
 // Export commonly used functions directly
-export { formatters as fmt } from "../graphUtils";
+export { formatters as fmt } from "./graphUtils";
 
 export const { clamp, distance, distanceSquared, isWithinBounds } = mathUtils;
 

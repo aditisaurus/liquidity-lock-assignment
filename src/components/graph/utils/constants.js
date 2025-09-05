@@ -78,3 +78,5 @@ export const AXIS_LABELS = {
   x: "X Axis",
   y: "Y Axis",
 };
+
+

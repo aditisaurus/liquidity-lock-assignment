@@ -11,17 +11,18 @@ import {
   TableBody,
   Fade,
 } from "@mui/material";
-
+import TableFooter from "./TableFooter";
 import { defaultNumberFormatter } from "../../utils/numberFormatters";
-import { headerCellSx } from "../../utils/styles";
 import TableRowComponent from "./TableRowComponent";
+import { headerCellSx } from "./styles";
 
 const DataTable = memo(function DataTable({
   points,
   highlightedPoint,
   onRowHover,
   onPointEdit,
-  onPointDelete,
+  onPointDelete, onExportJSON,
+  onExportCSV,
   numberFormatter = defaultNumberFormatter,
 }) {
   const containerRef = useRef(null);
@@ -46,21 +47,6 @@ const DataTable = memo(function DataTable({
 
   return (
     <Paper elevation={3} sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
-     {/* <Box
-  sx={{
-    p: 2,
-    borderBottom: "1px solid rgba(224, 224, 224, 1)",
-    textAlign: "center",   
-  }}
->
-  <Typography variant="h6" align="center">
-    Data Points Table
-  </Typography>
-
-  <Typography variant="caption" color="text.secondary" align="center">
-    Hover to highlight • Click edit to modify coordinates
-  </Typography>
-</Box> */}
 
       <TableContainer ref={containerRef} sx={{ flexGrow: 1, overflow: "auto" }}>
         <Table stickyHeader size="small">
@@ -107,23 +93,11 @@ const DataTable = memo(function DataTable({
         </Table>
       </TableContainer>
 
-      {points.length > 0 && (
-        <Box
-          sx={{
-            p: 1.5,
-            borderTop: "1px solid rgba(224, 224, 224, 1)",
-            bgcolor: "grey.50",
-            display: "flex",
-            alignItems: "center",
-          }}
-        >
-          {points.length > 10 && (
-            <Typography variant="caption" color="text.secondary">
-              Scroll to see more
-            </Typography>
-          )}
-        </Box>
-      )}
+      <TableFooter
+        points={points}
+        onExportJSON={onExportJSON}
+        onExportCSV={onExportCSV}
+      />
     </Paper>
   );
 });
