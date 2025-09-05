@@ -1,35 +1,65 @@
-import React, { useEffect, useRef, useMemo, useCallback } from "react";
+// src/components/graph/Graph.jsx
+import React, { useEffect, useRef, useMemo } from "react";
 import * as d3 from "d3";
 import { Paper, Box } from "@mui/material";
-import { usePoints } from "../../hooks/usePoints";
-import { useRecoilValue } from "recoil";
-import { sortedPointsSelector } from "../../store/atoms";
 import debounce from "lodash.debounce";
 
-const Graph = ({
+const si = d3.format(".2s");
+const siFmt = (n) => si(n).replace("G", "B"); // 1.2G -> 1.2B
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+/**
+ * Pure graph plugin with zoom & pan + double-click/double-tap add.
+ * Auto-pans to highlighted points when they're outside the viewport.
+ *
+ * Props:
+ *  - points: [{id,x,y}]
+ *  - highlightedPoint: string|null
+ *  - onPointsChange(newPoints)
+ *  - onPointHover(id|null)
+ *  - onPointClick(point)
+ *  - width, height, margin
+ *  - scaleMode: "auto" | "linear" | "log" | "symlog" (default "auto")
+ *  - xTickFormat, yTickFormat: (n)=>string (optional; default SI)
+ *  - logThreshold: { x: number, y: number } (when scaleMode="auto")
+ *  - zoomScaleExtent?: [min,max]  (default [0.5, 40])
+ */
+
+const Graph = React.memo(function Graph({
+  points = [],
+  highlightedPoint = null,
+  onPointsChange,
+  onPointHover,
+  onPointClick,
   width = 800,
   height = 500,
   margin = { top: 20, right: 30, bottom: 40, left: 50 },
-}) => {
+  scaleMode = "auto",
+  xTickFormat,
+  yTickFormat,
+  logThreshold = { x: 1e6, y: 1e6 },
+  zoomScaleExtent = [0.5, 40],
+}) {
   const svgRef = useRef(null);
-  const tooltipRef = useRef(null);
+  const zoomRef = React.useRef(null);
+  const svgSelRef = React.useRef(null);
+  // zoom/drag state
   const isDraggingRef = useRef(false);
-  const lastRenderRef = useRef(0);
+  const dragStartRef = useRef(null);
+  const zoomTransformRef = useRef(d3.zoomIdentity);
 
-  const {
-    points,
-    highlightedPoint,
-    boundingBox,
-    addPoint,
-    updatePoint,
-    highlightPoint,
-    clearHighlight,
-    startEditingPoint,
-  } = usePoints();
+  // current (zoomed) scales
+  const currentScalesRef = useRef({ xScale: null, yScale: null });
 
-  const sortedPoints = useRecoilValue(sortedPointsSelector);
+  // ids (per-instance) for clipPath and tooltip
+  const clipIdRef = useRef(`clip-${Math.random().toString(36).slice(2)}`);
+  const tooltipIdRef = useRef(`tt-${Math.random().toString(36).slice(2)}`);
 
-  // Dimensions inside axes
+  // for double-tap
+  const lastTapRef = useRef({ t: 0, x: 0, y: 0 });
+
+  const sortedPoints = useMemo(() => [...points].sort((a, b) => a.x - b.x), [points]);
+
   const dimensions = useMemo(
     () => ({
       innerWidth: width - margin.left - margin.right,
@@ -38,111 +68,91 @@ const Graph = ({
     [width, height, margin]
   );
 
-  // Scales
-  const scales = useMemo(() => {
-    const xScale = d3
-      .scaleLinear()
-      .domain([boundingBox.minX, boundingBox.maxX])
-      .range([0, dimensions.innerWidth]);
+  // Data-driven domains with padding
+  const domains = useMemo(() => {
+    if (!points.length) return { x: [0, 100], y: [0, 100] };
+    const xs = points.map((p) => p.x);
+    const ys = points.map((p) => p.y);
+    const dx = (d3.max(xs) - d3.min(xs)) * 0.05 || 5;
+    const dy = (d3.max(ys) - d3.min(ys)) * 0.05 || 5;
+    return {
+      x: [d3.min(xs) - dx, d3.max(xs) + dx],
+      y: [d3.min(ys) - dy, d3.max(ys) + dy],
+    };
+  }, [points]);
 
-    const yScale = d3
-      .scaleLinear()
-      .domain([boundingBox.minY, boundingBox.maxY])
-      .range([dimensions.innerHeight, 0]);
+  // Base scales (pre-zoom)
+  const makeBaseScale = (domain, axis) => {
+    const { innerWidth, innerHeight } = dimensions;
+    const range = axis === "x" ? [0, innerWidth] : [innerHeight, 0];
+    const span = Math.abs(domain[1] - domain[0]);
+    const wantsSymlog = span >= (axis === "x" ? logThreshold.x : logThreshold.y);
+    const mode = scaleMode === "auto" ? (wantsSymlog ? "symlog" : "linear") : scaleMode;
 
-    return { xScale, yScale };
-  }, [boundingBox, dimensions]);
+    if (mode === "log") {
+      const min = Math.min(...domain);
+      if (min <= 0) return d3.scaleSymlog().constant(1).domain(domain).range(range).nice();
+      return d3.scaleLog().domain(domain).range(range).nice();
+    }
+    if (mode === "symlog") {
+      return d3.scaleSymlog().constant(1).domain(domain).range(range).nice();
+    }
+    return d3.scaleLinear().domain(domain).range(range).nice();
+  };
 
-  // Debounced update for smooth dragging (~60fps)
-  const debouncedUpdate = useMemo(
-    () =>
-      debounce((id, x, y) => {
-        updatePoint(id, x, y);
-      }, 16),
-    [updatePoint]
+  const baseScales = useMemo(
+    () => ({
+      xScale: makeBaseScale(domains.x, "x"),
+      yScale: makeBaseScale(domains.y, "y"),
+    }),
+    [domains, dimensions, scaleMode, logThreshold]
   );
 
-  useEffect(() => () => debouncedUpdate.cancel(), [debouncedUpdate]);
-
-  // Double-click to add a point
-  const handleDoubleClick = useCallback(
-    (event) => {
-      event.preventDefault();
-      const svg = d3.select(svgRef.current);
-      const g = svg.select(".main-group");
-      const [mouseX, mouseY] = d3.pointer(event, g.node());
-      const x = scales.xScale.invert(mouseX);
-      const y = scales.yScale.invert(mouseY);
-
-      if (
-        mouseX >= 0 &&
-        mouseX <= dimensions.innerWidth &&
-        mouseY >= 0 &&
-        mouseY <= dimensions.innerHeight
-      ) {
-        addPoint(x, y);
-      }
-    },
-    [scales, dimensions, addPoint]
-  );
+  // Debounced updater while dragging
+  const debouncedUpdateRef = useRef(null);
+  if (!debouncedUpdateRef.current) {
+    debouncedUpdateRef.current = debounce((id, x, y, prevPoints, cb) => {
+      cb(prevPoints.map((p) => (p.id === id ? { ...p, x, y } : p)));
+    }, 16);
+  }
 
   useEffect(() => {
-    // avoid full redraw during drag (we move the element directly)
-    if (isDraggingRef.current) return;
     if (!svgRef.current) return;
 
-    // throttle heavy redraws
-    const now = Date.now();
-    if (now - lastRenderRef.current < 16) return;
-    lastRenderRef.current = now;
-
+    const { innerWidth, innerHeight } = dimensions;
     const svg = d3.select(svgRef.current);
-
-    // Clear previous content
+    svgSelRef.current = svg;
     svg.selectAll("*").remove();
+    svg.style("cursor", "grab"); // default hand cursor
 
-    // Main group with margins applied
+    // Root group (with margins)
     const g = svg
       .append("g")
       .attr("class", "main-group")
       .attr("transform", `translate(${margin.left},${margin.top})`);
 
-    const { xScale, yScale } = scales;
-    const { innerWidth, innerHeight } = dimensions;
+    // --- CLIP PATH (keeps path/points inside axes) ---
+    const clipId = clipIdRef.current;
+    svg
+      .append("defs")
+      .append("clipPath")
+      .attr("id", clipId)
+      .append("rect")
+      .attr("width", innerWidth)
+      .attr("height", innerHeight)
+      .attr("x", 0)
+      .attr("y", 0);
 
-    // Grid
-    const xGrid = d3
-      .axisBottom(xScale)
-      .tickSize(-innerHeight)
-      .tickFormat("")
-      .ticks(10);
-    const yGrid = d3
-      .axisLeft(yScale)
-      .tickSize(-innerWidth)
-      .tickFormat("")
-      .ticks(10);
+    // Axes & grids (not clipped)
+    const xFmt = xTickFormat || siFmt;
+    const yFmt = yTickFormat || siFmt;
 
-    g.append("g")
-      .attr("class", "grid x-grid")
-      .attr("transform", `translate(0,${innerHeight})`)
-      .call(xGrid)
-      .style("stroke-dasharray", "3,3")
-      .style("opacity", 0.2);
+    const gridX = g.append("g").attr("class", "grid x-grid").attr("transform", `translate(0,${innerHeight})`);
+    const gridY = g.append("g").attr("class", "grid y-grid");
+    const axX = g.append("g").attr("class", "x-axis").attr("transform", `translate(0,${innerHeight})`);
+    const axY = g.append("g").attr("class", "y-axis");
 
-    g.append("g")
-      .attr("class", "grid y-grid")
-      .call(yGrid)
-      .style("stroke-dasharray", "3,3")
-      .style("opacity", 0.2);
-
-    // Axes
-    const xAxis = d3.axisBottom(xScale).ticks(10);
-    const yAxis = d3.axisLeft(yScale).ticks(10);
-
-    g.append("g")
-      .attr("class", "x-axis")
-      .attr("transform", `translate(0,${innerHeight})`)
-      .call(xAxis)
+    axX
       .append("text")
       .attr("x", innerWidth / 2)
       .attr("y", 35)
@@ -150,9 +160,7 @@ const Graph = ({
       .style("text-anchor", "middle")
       .text("X Axis");
 
-    g.append("g")
-      .attr("class", "y-axis")
-      .call(yAxis)
+    axY
       .append("text")
       .attr("transform", "rotate(-90)")
       .attr("y", -35)
@@ -161,30 +169,90 @@ const Graph = ({
       .style("text-anchor", "middle")
       .text("Y Axis");
 
-    // Polyline
-    if (sortedPoints.length > 1) {
-      const line = d3
-        .line()
-        .x((d) => xScale(d.x))
-        .y((d) => yScale(d.y))
-        .curve(d3.curveLinear);
+    // Plot area (clipped group)
+    const plot = g
+      .append("g")
+      .attr("class", "plot-area")
+      .attr("clip-path", `url(#${clipId})`);
+    // Path & points
+    const path = plot.append("path").attr("fill", "none").attr("stroke", "#1976d2").attr("stroke-width", 2);
+    const ptsSel = plot.selectAll(".point").data(points, (d) => d.id).join("circle").attr("class", "point");
 
-      g.append("path")
-        .datum(sortedPoints)
-        .attr("class", "line")
-        .attr("fill", "none")
-        .attr("stroke", "#1976d2")
-        .attr("stroke-width", 2)
-        .attr("d", line);
-    }
+    // Draw helper (works with zoomed scales)
+    const draw = (xS, yS) => {
+      currentScalesRef.current = { xScale: xS, yScale: yS };
 
-    // Tooltip
-    let tooltipDiv = d3.select("body").select(".graph-tooltip");
+      // Grids
+      gridX
+        .call(d3.axisBottom(xS).tickSize(-innerHeight).tickFormat("").ticks(6))
+        .selectAll("line")
+        .style("stroke-dasharray", "3,3")
+        .style("opacity", 0.2);
+      gridY
+        .call(d3.axisLeft(yS).tickSize(-innerWidth).tickFormat("").ticks(6))
+        .selectAll("line")
+        .style("stroke-dasharray", "3,3")
+        .style("opacity", 0.2);
+
+      // Axes
+      axX.call(d3.axisBottom(xS).ticks(6).tickFormat(xFmt));
+      axY.call(d3.axisLeft(yS).ticks(6).tickFormat(yFmt));
+
+      // Line
+      if (sortedPoints.length > 1) {
+        const line = d3
+          .line()
+          .x((d) => xS(d.x))
+          .y((d) => yS(d.y))
+          .curve(d3.curveLinear);
+        path.datum(sortedPoints).attr("d", line);
+      } else {
+        path.attr("d", null);
+      }
+
+      // Points
+      ptsSel
+        .data(points, (d) => d.id)
+        .join(
+          (enter) =>
+            enter
+              .append("circle")
+              .attr("class", "point")
+              .attr("cx", (d) => xS(d.x))
+              .attr("cy", (d) => yS(d.y))
+              .attr("r", 0)
+              .style("fill", (d) => (highlightedPoint === d.id ? "#ff5722" : "#1976d2"))
+              .style("opacity", (d) => (highlightedPoint ? (highlightedPoint === d.id ? 1 : 0.35) : 1))
+              .style("stroke", "white")
+              .style("stroke-width", 2)
+              .style("cursor", "grab")
+              .call((s) => s.transition().duration(150).attr("r", (d) => (highlightedPoint === d.id ? 8 : 6))),
+          (update) =>
+            update
+              .attr("cx", (d) => xS(d.x))
+              .attr("cy", (d) => yS(d.y))
+              .attr("r", (d) => (highlightedPoint === d.id ? 8 : 6))
+              .style("fill", (d) => (highlightedPoint === d.id ? "#ff5722" : "#1976d2"))
+              .style("opacity", (d) => (highlightedPoint ? (highlightedPoint === d.id ? 1 : 0.35) : 1))
+              .each(function (d) {
+                if (highlightedPoint === d.id) d3.select(this).raise();
+              }),
+          (exit) => exit.call((s) => s.transition().duration(150).attr("r", 0).remove())
+        );
+    };
+
+    // Initial draw using last zoom transform (if any)
+    const xInitial = zoomTransformRef.current.rescaleX(baseScales.xScale);
+    const yInitial = zoomTransformRef.current.rescaleY(baseScales.yScale);
+    draw(xInitial, yInitial);
+
+    // Tooltip (per-instance)
+    let tooltipDiv = d3.select(`body`).select(`div[data-graph-tt="${tooltipIdRef.current}"]`);
     if (tooltipDiv.empty()) {
       tooltipDiv = d3
         .select("body")
         .append("div")
-        .attr("class", "graph-tooltip")
+        .attr("data-graph-tt", tooltipIdRef.current)
         .style("position", "absolute")
         .style("padding", "10px")
         .style("background", "rgba(0, 0, 0, 0.8)")
@@ -196,150 +264,233 @@ const Graph = ({
         .style("z-index", 1000);
     }
 
-    // Points (enter/update apply highlight styles)
-    const pointsGroup = g
+    // Hover + click
+    plot
       .selectAll(".point")
-      .data(points, (d) => d.id)
-      .join(
-        (enter) =>
-          enter
-            .append("circle")
-            .attr("class", "point")
-            .attr("cx", (d) => xScale(d.x))
-            .attr("cy", (d) => yScale(d.y))
-            .attr("r", 0)
-            .style("fill", (d) =>
-              highlightedPoint === d.id ? "#ff5722" : "#1976d2"
-            )
-            .style("opacity", (d) =>
-              highlightedPoint ? (highlightedPoint === d.id ? 1 : 0.35) : 1
-            )
-            .style("stroke", "white")
-            .style("stroke-width", 2)
-            .style("cursor", "move")
-            .call((s) =>
-              s
-                .transition()
-                .duration(150)
-                .attr("r", (d) => (highlightedPoint === d.id ? 8 : 6))
-            ),
-        (update) =>
-          update
-            .attr("cx", (d) => xScale(d.x))
-            .attr("cy", (d) => yScale(d.y))
-            .attr("r", (d) => (highlightedPoint === d.id ? 8 : 6))
-            .style("fill", (d) =>
-              highlightedPoint === d.id ? "#ff5722" : "#1976d2"
-            )
-            .style("opacity", (d) =>
-              highlightedPoint ? (highlightedPoint === d.id ? 1 : 0.35) : 1
-            )
-            .each(function (d) {
-              if (highlightedPoint === d.id) d3.select(this).raise();
-            }),
-        (exit) =>
-          exit.call((s) => s.transition().duration(150).attr("r", 0).remove())
-      );
-
-    // Hover + click handlers
-    pointsGroup
       .on("mouseover", function (event, d) {
         if (!isDraggingRef.current) {
           d3.select(this).transition().duration(100).attr("r", 8);
           tooltipDiv
             .style("opacity", 1)
-            .html(`X: ${d.x.toFixed(2)}<br/>Y: ${d.y.toFixed(2)}`)
+            .html(`X: ${xFmt(d.x)}<br/>Y: ${yFmt(d.y)}`)
             .style("left", event.pageX + 10 + "px")
             .style("top", event.pageY - 28 + "px");
-          highlightPoint(d.id);
+          onPointHover?.(d.id);
         }
       })
       .on("mouseout", function () {
         if (!isDraggingRef.current) {
           d3.select(this).transition().duration(100).attr("r", 6);
           tooltipDiv.style("opacity", 0);
-          clearHighlight();
+          onPointHover?.(null);
         }
       })
       .on("click", function (event, d) {
+        if (isDraggingRef.current) return;
         event.stopPropagation();
-        startEditingPoint(d);
+        onPointClick?.(d);
       });
 
-    // Drag behavior (use pointer relative to <g>)
+    // Drag behavior (coordinates clamped to plot area)
     const drag = d3
       .drag()
-      .on("start", function () {
+      .on("start", function (event, d) {
         isDraggingRef.current = true;
-        d3.select(this).raise().attr("r", 8);
+        d3.select(this).raise().attr("r", 8).style("cursor", "grabbing");
+        svg.style("cursor", "grabbing");
+        const [mx, my] = d3.pointer(event, g.node());
+        dragStartRef.current = { x: mx, y: my };
       })
       .on("drag", function (event, d) {
-        const [mx, my] = d3.pointer(event, g.node());
+        const [mxRaw, myRaw] = d3.pointer(event, g.node());
+        const mx = clamp(mxRaw, 0, innerWidth);
+        const my = clamp(myRaw, 0, innerHeight);
+        const { xScale, yScale } = currentScalesRef.current || baseScales;
         const newX = xScale.invert(mx);
         const newY = yScale.invert(my);
 
-        // immediate visual update
         d3.select(this).attr("cx", mx).attr("cy", my);
-
-        // tooltip
         tooltipDiv
           .style("opacity", 1)
-          .html(`X: ${newX.toFixed(2)}<br/>Y: ${newY.toFixed(2)}`)
+          .html(`X: ${xFmt(newX)}<br/>Y: ${yFmt(newY)}`)
           .style("left", event.sourceEvent.pageX + 10 + "px")
           .style("top", event.sourceEvent.pageY - 28 + "px");
 
-        // debounced state update
-        debouncedUpdate(d.id, newX, newY);
+        debouncedUpdateRef.current(d.id, newX, newY, points, (np) => onPointsChange?.(np));
       })
       .on("end", function (event, d) {
-        isDraggingRef.current = false;
-        d3.select(this).transition().duration(100).attr("r", 6);
-        tooltipDiv.style("opacity", 0);
+        const [mxRaw, myRaw] = d3.pointer(event, g.node());
+        const mx = clamp(mxRaw, 0, innerWidth);
+        const my = clamp(myRaw, 0, innerHeight);
+        const { xScale, yScale } = currentScalesRef.current || baseScales;
+        const finalX = xScale.invert(mx);
+        const finalY = yScale.invert(my);
 
-        // final precise commit (non-debounced)
-        const [mx, my] = d3.pointer(event, g.node());
-        updatePoint(d.id, xScale.invert(mx), yScale.invert(my));
+        tooltipDiv.style("opacity", 0);
+        d3.select(this).transition().duration(100).attr("r", 6).style("cursor", "grab");
+        svg.style("cursor", "grab");
+
+        onPointsChange?.(points.map((p) => (p.id === d.id ? { ...p, x: finalX, y: finalY } : p)));
+
+        const start = dragStartRef.current;
+        isDraggingRef.current = false;
+        if (start) {
+          const dx = mx - start.x;
+          const dy = my - start.y;
+          if (dx * dx + dy * dy < 4) onPointClick?.(d);
+        }
+        dragStartRef.current = null;
       });
 
-    pointsGroup.call(drag);
+    plot.selectAll(".point").call(drag);
 
-    // Double-click to add
+    // ---- ZOOM & PAN ----
+    const zoomed = (event) => {
+      zoomTransformRef.current = event.transform;
+      const xS = event.transform.rescaleX(baseScales.xScale);
+      const yS = event.transform.rescaleY(baseScales.yScale);
+      draw(xS, yS);
+    };
+
+    const zoom = d3
+      .zoom()
+      .filter((event) => event.type !== "dblclick") // reserve dblclick for "add"
+      .scaleExtent(zoomScaleExtent)
+      .translateExtent([
+        [0, 0],
+        [innerWidth, innerHeight],
+      ])
+      .extent([
+        [0, 0],
+        [innerWidth, innerHeight],
+      ])
+      .on("start", () => svg.style("cursor", "grabbing"))
+      .on("zoom", zoomed)
+      .on("end", () => svg.style("cursor", "grab"));
+
+    zoomRef.current = zoom;
+
+    svg.call(zoom).on("dblclick.zoom", null); // kill default dblclick-zoom
+
+    // Helper: add a point using current (zoomed) scales, clamped to plot
+    const addAtMouse = (mx, my) => {
+      const { xScale, yScale } = currentScalesRef.current || baseScales;
+      if (!onPointsChange) return;
+      const cx = clamp(mx, 0, innerWidth);
+      const cy = clamp(my, 0, innerHeight);
+      const x = xScale.invert(cx);
+      const y = yScale.invert(cy);
+      const newPoint = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8), x, y };
+      onPointsChange([...points, newPoint]);
+    };
+
+    // Desktop double-click to add
+    const handleDoubleClick = (event) => {
+      const [mx, my] = d3.pointer(event, g.node());
+      addAtMouse(mx, my);
+    };
     svg.on("dblclick", handleDoubleClick);
 
-    // Cleanup tooltip on unmount/redraw
-    return () => {
-      if (tooltipRef.current) {
-        tooltipDiv.remove();
+    // Touch double-tap to add
+    const handlePointerDown = (event) => {
+      if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
+      const [mx, my] = d3.pointer(event, g.node());
+      const now = Date.now();
+      const prev = lastTapRef.current;
+      const dt = now - prev.t;
+      const dx = mx - prev.x;
+      const dy = my - prev.y;
+
+      if (dt < 300 && dx * dx + dy * dy < 64) {
+        addAtMouse(mx, my);
+        lastTapRef.current = { t: 0, x: 0, y: 0 };
+      } else {
+        lastTapRef.current = { t: now, x: mx, y: my };
       }
+    };
+    svg.on("pointerdown", handlePointerDown);
+
+    // Cleanup
+    return () => {
+      svg.on(".zoom", null).on("dblclick", null).on("pointerdown", null);
+      d3.select(`div[data-graph-tt="${tooltipIdRef.current}"]`).remove();
     };
   }, [
     points,
     highlightedPoint,
-    scales,
-    dimensions,
     sortedPoints,
+    baseScales,
+    dimensions,
     margin,
-    debouncedUpdate,
-    highlightPoint,
-    clearHighlight,
-    startEditingPoint,
-    handleDoubleClick,
+    onPointsChange,
+    onPointHover,
+    onPointClick,
+    xTickFormat,
+    yTickFormat,
+    zoomScaleExtent,
+    scaleMode,
+    logThreshold,
   ]);
+
+  // AUTO-PAN TO HIGHLIGHTED POINT
+  useEffect(() => {
+    if (!highlightedPoint || !zoomRef.current || !svgRef.current) return;
+
+    // find the point we want to bring into view
+    const p = points.find((pt) => pt.id === highlightedPoint);
+    if (!p) return;
+
+    const { innerWidth, innerHeight } = dimensions;
+    const t = zoomTransformRef.current;       // current zoom/pan
+    const k = t.k;                            // current zoom level
+
+    // Get the base (unzoomed) pixel coordinates of the point
+    const px0 = baseScales.xScale(p.x);
+    const py0 = baseScales.yScale(p.y);
+    
+    // Apply current transform to see where it is on screen
+    const sx = t.applyX(px0);
+    const sy = t.applyY(py0);
+
+    // Check if already visible (with padding)
+    const pad = 20;
+    const inView =
+      sx >= pad && sx <= innerWidth - pad &&
+      sy >= pad && sy <= innerHeight - pad;
+    
+    if (inView) return; // Already visible, no need to pan
+
+    // Calculate new translation to center the point (keeping same zoom level)
+    const tx = innerWidth / 2 - k * px0;
+    const ty = innerHeight / 2 - k * py0;
+    const next = d3.zoomIdentity.translate(tx, ty).scale(k);
+
+    // Store the new transform before applying
+    zoomTransformRef.current = next;
+
+    // Apply the transform with animation
+    d3.select(svgRef.current)
+      .transition()
+      .duration(300)
+      .call(zoomRef.current.transform, next);
+  }, [highlightedPoint, points, baseScales, dimensions]);
 
   return (
     <Paper elevation={3} sx={{ p: 2, height: "100%", position: "relative" }}>
       <Box sx={{ textAlign: "center", mb: 1 }}>
         <strong>Interactive Graph</strong>
         <Box sx={{ fontSize: "0.875rem", color: "text.secondary" }}>
-          Double-click to add point • Drag points to move • Click point to edit
+          Scroll to zoom • Drag to pan • Double-click/tap to add • Drag points to move • Click to edit
         </Box>
       </Box>
       <svg
         ref={svgRef}
         width={width}
         height={height}
-        style={{ display: "block", margin: "0 auto" }}
+        // touchAction none so d3 can handle pan/zoom gestures on touch
+        style={{ display: "block", margin: "0 auto", touchAction: "none" }}
       />
+      
       {points.length === 0 && (
         <Box
           sx={{
@@ -352,11 +503,11 @@ const Graph = ({
           }}
         >
           <Box sx={{ fontSize: "1.2rem", mb: 1 }}>No points yet</Box>
-          <Box sx={{ fontSize: "0.9rem" }}>Double-click anywhere to start</Box>
+          <Box sx={{ fontSize: "0.9rem" }}>Double-click/tap anywhere to start</Box>
         </Box>
       )}
     </Paper>
   );
-};
+});
 
 export default Graph;
