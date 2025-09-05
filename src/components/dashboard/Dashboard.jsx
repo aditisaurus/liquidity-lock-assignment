@@ -9,6 +9,12 @@ import { Typography } from "@mui/material";
 import { SAMPLE_POINTS } from "./utils/constants";
 import { getKey, safeParse } from "./utils/storage";
 
+// helper to sanitize numbers
+const sanitizeNumber = (val) => {
+  const n = Number(val);
+  return Number.isFinite(n) ? n : 0;
+};
+
 const Dashboard = ({ user, onLogout }) => {
   const storageKey = useMemo(() => getKey(user), [user?.uid]);
 
@@ -37,10 +43,7 @@ const Dashboard = ({ user, onLogout }) => {
     } catch {}
   }, [points, storageKey]);
 
-  useEffect(() => {
-    const saved = safeParse(localStorage.getItem(storageKey));
-    setPoints(saved ?? SAMPLE_POINTS);
-  }, [storageKey]);
+  // 🔥 removed the extra effect that overwrote points from localStorage
 
   useEffect(() => {
     const onStorage = (e) => {
@@ -61,10 +64,15 @@ const Dashboard = ({ user, onLogout }) => {
     setTimeout(() => setNotification({ show: false, message: "" }), 3000);
   };
 
-  const handlePointsChange = useCallback(
-    (newPoints) => setPoints(newPoints),
-    []
-  );
+  const handlePointsChange = useCallback((newPoints) => {
+    setPoints(
+      newPoints.map((p) => ({
+        ...p,
+        x: sanitizeNumber(p.x),
+        y: sanitizeNumber(p.y),
+      }))
+    );
+  }, []);
 
   const handlePointEdit = useCallback((point) => {
     setEditingPoint(point);
@@ -74,7 +82,9 @@ const Dashboard = ({ user, onLogout }) => {
   const handleDialogLiveChange = useCallback((updated) => {
     setPoints((prev) =>
       prev.map((p) =>
-        p.id === updated.id ? { ...p, x: updated.x, y: updated.y } : p
+        p.id === updated.id
+          ? { ...p, x: sanitizeNumber(updated.x), y: sanitizeNumber(updated.y) }
+          : p
       )
     );
     setHighlightedPoint(updated.id);
@@ -82,7 +92,15 @@ const Dashboard = ({ user, onLogout }) => {
 
   const handlePointSave = useCallback((updatedPoint) => {
     setPoints((prev) =>
-      prev.map((p) => (p.id === updatedPoint.id ? updatedPoint : p))
+      prev.map((p) =>
+        p.id === updatedPoint.id
+          ? {
+              ...updatedPoint,
+              x: sanitizeNumber(updatedPoint.x),
+              y: sanitizeNumber(updatedPoint.y),
+            }
+          : p
+      )
     );
     showNotification("Point updated successfully");
   }, []);
@@ -126,7 +144,7 @@ const Dashboard = ({ user, onLogout }) => {
   // Render
   // ----------------------
   return (
-    <div className="min-h-screen bg-gray-100 p-5 font-sans">
+    <div className="min-h-screen p-5 font-sans bg-gray-100">
       {/* Header */}
       <DashboardHeader
         user={user}
@@ -138,7 +156,7 @@ const Dashboard = ({ user, onLogout }) => {
       <div className="grid grid-cols-[2fr_1fr] gap-8">
         {/* Graph Card */}
         <div className="flex h-[600px] flex-col rounded-2xl bg-white p-6 shadow-lg">
-          <div className="rounded-t-2xl bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 p-4">
+          <div className="p-4 rounded-t-2xl bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50">
             <strong className="block text-lg font-semibold">
               Interactive Graph
             </strong>
@@ -162,7 +180,7 @@ const Dashboard = ({ user, onLogout }) => {
 
         {/* Table Card */}
         <div className="flex h-[600px] flex-col rounded-2xl bg-white p-6 shadow-lg">
-          <div className="rounded-t-2xl bg-gradient-to-r from-purple-50 via-pink-50 to-rose-50 p-4 ">
+          <div className="p-4 rounded-t-2xl bg-gradient-to-r from-purple-50 via-pink-50 to-rose-50 ">
             <Typography variant="h6">Data Points Table</Typography>
 
             <Typography variant="caption" color="text.secondary">
@@ -180,7 +198,7 @@ const Dashboard = ({ user, onLogout }) => {
             />
           </div>
 
-          <div className="mt-3 rounded-lg bg-gray-50 border border-gray-200 p-2 text-center text-sm text-gray-600">
+          <div className="p-2 mt-3 text-sm text-center text-gray-600 border border-gray-200 rounded-lg bg-gray-50">
             Total Points: {points.length}
           </div>
         </div>
@@ -197,7 +215,7 @@ const Dashboard = ({ user, onLogout }) => {
 
       {/* Notification */}
       {notification.show && (
-        <div className="fixed bottom-5 right-5 z-50 animate-slideIn rounded-lg bg-green-600 px-5 py-3 text-white shadow-lg">
+        <div className="fixed z-50 px-5 py-3 text-white bg-green-600 rounded-lg shadow-lg bottom-5 right-5 animate-slideIn">
           {notification.message}
         </div>
       )}
